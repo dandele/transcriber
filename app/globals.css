@@ -1,26 +1,77 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-bg:           #FAF8F4;
+  --color-bg-card:      #FFFFFF;
+  --color-bg-subtle:    #F4F1EC;
+  --color-text-1:       #1C1915;
+  --color-text-2:       #6B6560;
+  --color-text-3:       #A8A39C;
+  --color-accent:       oklch(0.60 0.13 48);
+  --color-accent-hover: oklch(0.55 0.14 48);
+  --color-accent-light: oklch(0.94 0.04 48);
+  --color-accent-text:  oklch(0.55 0.14 48);
+  --color-border:       #E8E4DC;
+  --color-border-subtle:#F0EDE7;
+  --color-success:      oklch(0.60 0.13 148);
+  --color-success-light:oklch(0.94 0.04 148);
+  --color-warning:      oklch(0.55 0.14 70);
+  --color-warning-light:oklch(0.95 0.06 75);
+  --color-danger:       oklch(0.55 0.15 25);
+  --color-danger-light: oklch(0.85 0.06 25);
+
+  --speaker-1: oklch(0.60 0.13 48);
+  --speaker-2: oklch(0.60 0.13 220);
+  --speaker-3: oklch(0.60 0.13 148);
+  --speaker-4: oklch(0.60 0.13 300);
+  --speaker-5: oklch(0.60 0.13 70);
+
+  --shadow-sm: 0 1px 3px rgba(28,25,21,0.04);
+  --shadow-md: 0 4px 16px rgba(28,25,21,0.06);
+  --shadow-lg: 0 8px 32px rgba(28,25,21,0.12);
+
+  --radius-sm:   4px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-full: 9999px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+*, *::before, *::after { box-sizing: border-box; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text-1);
+  font-family: var(--font-dm-sans), 'DM Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+
+@keyframes wave {
+  0%, 100% { transform: scaleY(1); }
+  50%       { transform: scaleY(0.4); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Print styles (PDF export) ── */
+@media print {
+  aside, header, [data-noprint] { display: none !important; }
+  body { background: #fff !important; }
+  [data-printarea] {
+    display: block !important;
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+  [data-segment] {
+    break-inside: avoid;
+    border-bottom: 1px solid #eee;
+    padding: 10px 0 !important;
+    background: transparent !important;
+  }
 }
