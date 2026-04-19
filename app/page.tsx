@@ -15,7 +15,7 @@ type TranscriptResult = {
   duration: number;
 };
 
-type Status = "idle" | "uploading" | "processing" | "completed" | "error";
+type Status = "idle" | "uploading" | "submitting" | "processing" | "completed" | "error";
 
 const SPEAKER_COLORS: Record<string, string> = {
   A: "bg-blue-100 text-blue-800 border-blue-200",
@@ -95,15 +95,28 @@ export default function Home() {
       setErrorMsg("");
       setStatus("uploading");
 
-      const formData = new FormData();
-      formData.append("audio", file);
-
       try {
-        const res = await fetch("/api/transcribe", {
+        const uploadRes = await fetch("/api/upload", {
           method: "POST",
-          body: formData,
+          headers: { "Content-Type": "application/octet-stream" },
+          body: file,
         });
-        const data = await res.json();
+        const uploadData = await uploadRes.json();
+
+        if (uploadData.error) {
+          setErrorMsg(uploadData.error);
+          setStatus("error");
+          return;
+        }
+
+        setStatus("submitting");
+
+        const transcribeRes = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ upload_url: uploadData.upload_url }),
+        });
+        const data = await transcribeRes.json();
 
         if (data.error) {
           setErrorMsg(data.error);
@@ -219,13 +232,18 @@ export default function Home() {
           </>
         )}
 
-        {status === "uploading" && (
+        {(status === "uploading" || status === "submitting") && (
           <div className="bg-white rounded-2xl p-8 text-center shadow-sm border border-gray-100">
             <div className="text-4xl mb-4">⬆️</div>
-            <p className="font-medium text-gray-700">Caricamento in corso…</p>
+            <p className="font-medium text-gray-700">
+              {status === "uploading" ? "Caricamento in corso…" : "Avvio trascrizione…"}
+            </p>
             <p className="text-sm text-gray-400 mt-1">{fileName}</p>
             <div className="mt-6 h-2 bg-gray-100 rounded-full overflow-hidden">
-              <div className="h-full bg-blue-400 rounded-full animate-pulse w-2/3" />
+              <div
+                className="h-full bg-blue-400 rounded-full transition-all duration-500"
+                style={{ width: status === "submitting" ? "90%" : "50%", animationName: "pulse" }}
+              />
             </div>
           </div>
         )}
