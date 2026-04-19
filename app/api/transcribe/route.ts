@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
 
     const transcript = await client.transcripts.submit({
       audio_url: upload_url,
-      speech_models: ["universal-2"],
+      speech_models: ["universal-3-pro"],
       language_code: "it",
       speaker_labels: true,
       punctuate: true,

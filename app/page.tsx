@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 type Utterance = {
   speaker: string;
@@ -17,6 +17,14 @@ type TranscriptResult = {
 
 type Status = "idle" | "uploading" | "submitting" | "processing" | "completed" | "error";
 
+type HistoryItem = {
+  id: string;
+  filename: string;
+  date: string;
+  fileSize: number;
+  result: TranscriptResult;
+};
+
 const SPEAKER_COLORS: Record<string, string> = {
   A: "bg-blue-100 text-blue-800 border-blue-200",
   B: "bg-green-100 text-green-800 border-green-200",
@@ -25,17 +33,77 @@ const SPEAKER_COLORS: Record<string, string> = {
   E: "bg-pink-100 text-pink-800 border-pink-200",
 };
 
+const STEPS = [
+  { key: "uploading", label: "Caricamento" },
+  { key: "submitting", label: "Avvio" },
+  { key: "processing", label: "Elaborazione" },
+];
+
 function formatTime(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
-  return `${m} min ${s} sec`;
+  if (m === 0) return `${s} sec`;
+  return `${m} min${s > 0 ? ` ${s} sec` : ""}`;
+}
+
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m === 0) return `${s}s`;
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function estimateWaitMinutes(fileSizeBytes: number): number {
+  // Assume ~96kbps average for M4A/AAC lectures
+  const estimatedAudioSec = (fileSizeBytes * 8) / (96 * 1000);
+  // AssemblyAI universal-3-pro: roughly 5x real-time
+  const processingMin = estimatedAudioSec / 5 / 60;
+  return Math.max(1, Math.round(processingMin));
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString("it-IT", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+const HISTORY_KEY = "transcriber_history";
+const MAX_HISTORY = 20;
+
+function loadHistory(): HistoryItem[] {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveToHistory(item: HistoryItem) {
+  const existing = loadHistory().filter((h) => h.id !== item.id);
+  const updated = [item, ...existing].slice(0, MAX_HISTORY);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+}
+
+function deleteFromHistory(id: string) {
+  const updated = loadHistory().filter((h) => h.id !== id);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
 }
 
 export default function Home() {
@@ -43,10 +111,33 @@ export default function Home() {
   const [errorMsg, setErrorMsg] = useState("");
   const [result, setResult] = useState<TranscriptResult | null>(null);
   const [fileName, setFileName] = useState("");
+  const [fileSize, setFileSize] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [currentId, setCurrentId] = useState<string>("");
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    setHistory(loadHistory());
+  }, []);
+
+  const startTimer = () => {
+    setElapsed(0);
+    timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
+  };
+
+  const stopTimer = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  };
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -55,31 +146,47 @@ export default function Home() {
     }
   };
 
-  const pollStatus = useCallback((id: string) => {
-    pollRef.current = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/status/${id}`);
-        const data = await res.json();
+  const pollStatus = useCallback(
+    (id: string, name: string, size: number) => {
+      pollRef.current = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/status/${id}`);
+          const data = await res.json();
 
-        if (data.error) {
+          if (data.error) {
+            stopPolling();
+            stopTimer();
+            setErrorMsg(data.error);
+            setStatus("error");
+            return;
+          }
+
+          if (data.status === "completed") {
+            stopPolling();
+            stopTimer();
+            setResult(data);
+            setStatus("completed");
+
+            const item: HistoryItem = {
+              id,
+              filename: name,
+              date: new Date().toISOString(),
+              fileSize: size,
+              result: data,
+            };
+            saveToHistory(item);
+            setHistory(loadHistory());
+          }
+        } catch {
           stopPolling();
-          setErrorMsg(data.error);
+          stopTimer();
+          setErrorMsg("Errore di connessione durante l'elaborazione");
           setStatus("error");
-          return;
         }
-
-        if (data.status === "completed") {
-          stopPolling();
-          setResult(data);
-          setStatus("completed");
-        }
-      } catch {
-        stopPolling();
-        setErrorMsg("Errore di connessione durante il polling");
-        setStatus("error");
-      }
-    }, 3000);
-  }, []);
+      }, 3000);
+    },
+    []
+  );
 
   const processFile = useCallback(
     async (file: File) => {
@@ -91,19 +198,24 @@ export default function Home() {
       }
 
       setFileName(file.name);
+      setFileSize(file.size);
       setResult(null);
       setErrorMsg("");
+      setCurrentId("");
       setStatus("uploading");
+      startTimer();
 
       try {
+        const uploadForm = new FormData();
+        uploadForm.append("audio", file);
         const uploadRes = await fetch("/api/upload", {
           method: "POST",
-          headers: { "Content-Type": "application/octet-stream" },
-          body: file,
+          body: uploadForm,
         });
         const uploadData = await uploadRes.json();
 
         if (uploadData.error) {
+          stopTimer();
           setErrorMsg(uploadData.error);
           setStatus("error");
           return;
@@ -119,14 +231,17 @@ export default function Home() {
         const data = await transcribeRes.json();
 
         if (data.error) {
+          stopTimer();
           setErrorMsg(data.error);
           setStatus("error");
           return;
         }
 
+        setCurrentId(data.id);
         setStatus("processing");
-        pollStatus(data.id);
+        pollStatus(data.id, file.name, file.size);
       } catch {
+        stopTimer();
         setErrorMsg("Errore durante il caricamento del file");
         setStatus("error");
       }
@@ -146,40 +261,52 @@ export default function Home() {
     if (file) processFile(file);
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = () => setIsDragging(false);
-
   const handleReset = () => {
     stopPolling();
+    stopTimer();
     setStatus("idle");
     setResult(null);
     setErrorMsg("");
     setFileName("");
+    setFileSize(0);
+    setElapsed(0);
+    setCurrentId("");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const buildPlainText = () => {
-    if (!result) return "";
-    return result.utterances.length > 0
-      ? result.utterances
-          .map((u) => `[${formatTime(u.start)}] Relatore ${u.speaker}: ${u.text}`)
-          .join("\n\n")
-      : (result.text ?? "");
+  const openFromHistory = (item: HistoryItem) => {
+    handleReset();
+    setFileName(item.filename);
+    setFileSize(item.fileSize);
+    setResult(item.result);
+    setCurrentId(item.id);
+    setStatus("completed");
+    setHistoryOpen(false);
   };
 
+  const removeFromHistory = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    deleteFromHistory(id);
+    setHistory(loadHistory());
+  };
+
+  const buildPlainText = (r: TranscriptResult) =>
+    r.utterances.length > 0
+      ? r.utterances
+          .map((u) => `[${formatTime(u.start)}] Relatore ${u.speaker}: ${u.text}`)
+          .join("\n\n")
+      : (r.text ?? "");
+
   const copyToClipboard = async () => {
-    await navigator.clipboard.writeText(buildPlainText());
+    if (!result) return;
+    await navigator.clipboard.writeText(buildPlainText(result));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const downloadTxt = () => {
     if (!result) return;
-    const blob = new Blob([buildPlainText()], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([buildPlainText(result)], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -188,26 +315,84 @@ export default function Home() {
     URL.revokeObjectURL(url);
   };
 
+  const isProcessing = ["uploading", "submitting", "processing"].includes(status);
+  const currentStep = STEPS.findIndex((s) => s.key === status);
+  const estimatedMin = estimateWaitMinutes(fileSize);
+
   return (
     <main className="min-h-screen bg-gray-50 py-12 px-4">
-      <div className="max-w-3xl mx-auto">
-        <div className="text-center mb-10">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Trascrittore Audio</h1>
-          <p className="text-gray-500">
-            Carica un file audio e ottieni la trascrizione con identificazione dei relatori
-          </p>
+      <div className="max-w-3xl mx-auto space-y-6">
+
+        {/* Header */}
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Trascrittore Audio</h1>
+            <p className="text-gray-500 mt-1 text-sm">
+              Trascrizione automatica con identificazione dei relatori
+            </p>
+          </div>
+          {history.length > 0 && (
+            <button
+              onClick={() => setHistoryOpen((o) => !o)}
+              className="flex items-center gap-2 text-sm px-4 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 transition-colors shadow-sm"
+            >
+              <span>🕘</span>
+              <span>Storico ({history.length})</span>
+            </button>
+          )}
         </div>
 
+        {/* History panel */}
+        {historyOpen && history.length > 0 && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+              <span className="font-medium text-gray-700 text-sm">Trascrizioni precedenti</span>
+              <button
+                onClick={() => setHistoryOpen(false)}
+                className="text-gray-400 hover:text-gray-600 text-lg leading-none"
+              >
+                ×
+              </button>
+            </div>
+            <div className="divide-y divide-gray-50 max-h-72 overflow-y-auto">
+              {history.map((item) => (
+                <div
+                  key={item.id}
+                  onClick={() => openFromHistory(item)}
+                  className="px-5 py-3 flex items-center justify-between hover:bg-gray-50 cursor-pointer group transition-colors"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-gray-700 truncate">{item.filename}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {formatDate(item.date)}
+                      {item.result.duration ? ` · ${formatDuration(item.result.duration)}` : ""}
+                      {item.fileSize ? ` · ${formatFileSize(item.fileSize)}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    onClick={(e) => removeFromHistory(item.id, e)}
+                    className="ml-3 text-gray-300 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all text-lg leading-none"
+                    title="Elimina"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Upload area */}
         {(status === "idle" || status === "error") && (
           <>
             <div
               onDrop={handleDrop}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
               onClick={() => fileInputRef.current?.click()}
               className={`
-                border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all
-                ${isDragging ? "border-blue-400 bg-blue-50" : "border-gray-300 bg-white hover:border-blue-300 hover:bg-blue-50"}
+                border-2 border-dashed rounded-2xl p-14 text-center cursor-pointer transition-all
+                ${isDragging ? "border-blue-400 bg-blue-50 scale-[1.01]" : "border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50"}
               `}
             >
               <input
@@ -221,58 +406,92 @@ export default function Home() {
               <p className="text-lg font-medium text-gray-700 mb-1">
                 Trascina qui il tuo file audio
               </p>
-              <p className="text-sm text-gray-400 mb-4">oppure clicca per selezionarlo</p>
+              <p className="text-sm text-gray-400 mb-5">oppure clicca per selezionarlo</p>
               <p className="text-xs text-gray-400">MP3 · WAV · M4A · OGG · FLAC · MP4 · max 500MB</p>
             </div>
             {status === "error" && (
-              <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
+              <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
                 {errorMsg}
               </div>
             )}
           </>
         )}
 
-        {(status === "uploading" || status === "submitting") && (
-          <div className="bg-white rounded-2xl p-8 text-center shadow-sm border border-gray-100">
-            <div className="text-4xl mb-4">⬆️</div>
-            <p className="font-medium text-gray-700">
-              {status === "uploading" ? "Caricamento in corso…" : "Avvio trascrizione…"}
-            </p>
-            <p className="text-sm text-gray-400 mt-1">{fileName}</p>
-            <div className="mt-6 h-2 bg-gray-100 rounded-full overflow-hidden">
+        {/* Processing */}
+        {isProcessing && (
+          <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 space-y-6">
+            {/* Step indicators */}
+            <div className="flex items-center gap-0">
+              {STEPS.map((step, i) => {
+                const done = i < currentStep;
+                const active = i === currentStep;
+                return (
+                  <div key={step.key} className="flex items-center flex-1">
+                    <div className="flex flex-col items-center flex-1">
+                      <div
+                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all
+                          ${done ? "bg-blue-600 text-white" : active ? "bg-blue-100 text-blue-700 ring-2 ring-blue-400" : "bg-gray-100 text-gray-400"}`}
+                      >
+                        {done ? "✓" : i + 1}
+                      </div>
+                      <span className={`text-xs mt-1.5 font-medium ${active ? "text-blue-600" : done ? "text-gray-500" : "text-gray-300"}`}>
+                        {step.label}
+                      </span>
+                    </div>
+                    {i < STEPS.length - 1 && (
+                      <div className={`h-0.5 flex-1 mx-1 mb-4 rounded transition-all ${done ? "bg-blue-400" : "bg-gray-100"}`} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* File info */}
+            <div className="text-center space-y-1">
+              <p className="font-medium text-gray-700 truncate">{fileName}</p>
+              <p className="text-sm text-gray-400">{formatFileSize(fileSize)}</p>
+            </div>
+
+            {/* Animated bar */}
+            <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
               <div
-                className="h-full bg-blue-400 rounded-full transition-all duration-500"
-                style={{ width: status === "submitting" ? "90%" : "50%", animationName: "pulse" }}
+                className={`h-full rounded-full transition-all duration-700 ${
+                  status === "processing" ? "bg-blue-400 animate-pulse" : "bg-blue-400"
+                }`}
+                style={{
+                  width: status === "uploading" ? "33%" : status === "submitting" ? "66%" : "85%",
+                }}
               />
             </div>
-          </div>
-        )}
 
-        {status === "processing" && (
-          <div className="bg-white rounded-2xl p-8 text-center shadow-sm border border-gray-100">
-            <div className="flex justify-center mb-4">
-              <svg className="animate-spin h-10 w-10 text-blue-500" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-              </svg>
+            {/* Time info */}
+            <div className="flex items-center justify-between text-xs text-gray-400">
+              <span>Tempo trascorso: <span className="font-mono text-gray-600">{formatElapsed(elapsed)}</span></span>
+              {status === "processing" && (
+                <span>Stima attesa: ~{estimatedMin} {estimatedMin === 1 ? "minuto" : "minuti"}</span>
+              )}
             </div>
-            <p className="font-medium text-gray-700">Trascrizione in elaborazione…</p>
-            <p className="text-sm text-gray-400 mt-1">{fileName}</p>
-            <p className="text-xs text-gray-400 mt-3">I file lunghi possono richiedere qualche minuto</p>
+
+            {status === "processing" && (
+              <p className="text-xs text-gray-400 text-center">
+                Puoi lasciare aperta questa scheda — la trascrizione continua in background
+              </p>
+            )}
           </div>
         )}
 
+        {/* Result */}
         {status === "completed" && result && (
-          <div className="space-y-4">
-            <div className="bg-white rounded-2xl px-6 py-4 shadow-sm border border-gray-100 flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-4 text-sm text-gray-500">
-                <span className="font-medium text-gray-700 truncate max-w-[200px]">{fileName}</span>
-                {result.duration && <span>⏱ {formatDuration(result.duration)}</span>}
+          <div className="space-y-3">
+            <div className="bg-white rounded-2xl px-5 py-4 shadow-sm border border-gray-100 flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3 text-sm text-gray-500 min-w-0">
+                <span className="font-medium text-gray-700 truncate max-w-[180px]">{fileName}</span>
+                {result.duration > 0 && <span>⏱ {formatDuration(result.duration)}</span>}
                 {result.utterances.length > 0 && (
                   <span>👥 {new Set(result.utterances.map((u) => u.speaker)).size} relatori</span>
                 )}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-shrink-0">
                 <button
                   onClick={copyToClipboard}
                   className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"

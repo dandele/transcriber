@@ -1,26 +1,27 @@
-export const runtime = "edge";
-export const maxDuration = 30;
+import { AssemblyAI } from "assemblyai";
+import { NextRequest, NextResponse } from "next/server";
 
-export async function POST(req: Request) {
-  if (!req.body) {
-    return Response.json({ error: "Nessun file ricevuto" }, { status: 400 });
+export const maxDuration = 60;
+
+const client = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_API_KEY! });
+
+export async function POST(req: NextRequest) {
+  try {
+    const formData = await req.formData();
+    const file = formData.get("audio") as File;
+
+    if (!file) {
+      return NextResponse.json({ error: "Nessun file ricevuto" }, { status: 400 });
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    const upload_url = await client.files.upload(buffer);
+
+    return NextResponse.json({ upload_url });
+  } catch (err) {
+    console.error("Errore upload:", err);
+    return NextResponse.json({ error: "Upload fallito" }, { status: 500 });
   }
-
-  const response = await fetch("https://api.assemblyai.com/v2/upload", {
-    method: "POST",
-    headers: {
-      Authorization: process.env.ASSEMBLYAI_API_KEY!,
-      "Content-Type": "application/octet-stream",
-    },
-    // @ts-expect-error duplex richiesto per streaming body
-    duplex: "half",
-    body: req.body,
-  });
-
-  if (!response.ok) {
-    return Response.json({ error: "Upload verso AssemblyAI fallito" }, { status: 500 });
-  }
-
-  const { upload_url } = await response.json();
-  return Response.json({ upload_url });
 }
