@@ -190,9 +190,9 @@ export default function Home() {
 
   const processFile = useCallback(
     async (file: File) => {
-      const validExt = /\.(mp3|wav|m4a|ogg|webm|mp4|flac)$/i;
+      const validExt = /\.(mp3|wav|m4a|m4b|aac|ogg|oga|opus|flac|wma|webm|mp4|mov|avi|mkv|3gp)$/i;
       if (!validExt.test(file.name)) {
-        setErrorMsg("Formato non supportato. Usa MP3, WAV, M4A, OGG, FLAC o MP4.");
+        setErrorMsg("Formato non riconosciuto. Prova con MP3, M4A, WAV, FLAC, MP4 o altri formati audio/video comuni.");
         setStatus("error");
         return;
       }
@@ -398,7 +398,7 @@ export default function Home() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".mp3,.wav,.m4a,.ogg,.webm,.mp4,.flac"
+                accept="audio/*,video/*,.m4a,.m4b,.flac,.wma,.opus"
                 className="hidden"
                 onChange={handleFileChange}
               />
@@ -407,7 +407,7 @@ export default function Home() {
                 Trascina qui il tuo file audio
               </p>
               <p className="text-sm text-gray-400 mb-5">oppure clicca per selezionarlo</p>
-              <p className="text-xs text-gray-400">MP3 · WAV · M4A · OGG · FLAC · MP4 · max 500MB</p>
+              <p className="text-xs text-gray-400">MP3 · M4A · WAV · FLAC · OGG · MP4 · MOV · e altri — max 500MB</p>
             </div>
             {status === "error" && (
               <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
